@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Contributions Minesweeper — Emmanuel Pérez Vivas</title>
+<style>
+  :root{--cell:26px;--gap:4px}
+  body{font-family:Inter,Segoe UI,Roboto,Arial;background:#0f172a;color:#e6eef8;display:flex;flex-direction:column;align-items:center;padding:24px}
+  h1{margin:0 0 12px;font-size:20px}
+  #boardWrap{background:linear-gradient(180deg,#071029,#081525);padding:20px;border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,.6)}
+  #board{display:grid;grid-auto-flow:column;grid-gap:var(--gap);background:transparent}
+  .col{display:grid;grid-auto-rows:var(--cell);grid-gap:var(--gap)}
+  .cell{width:var(--cell);height:var(--cell);display:flex;align-items:center;justify-content:center;border-radius:6px;background:#0b1220;cursor:pointer;border:1px solid rgba(255,255,255,0.03);user-select:none;font-weight:700}
+  .cell.revealed{background:#e6eef8;color:#071127;cursor:default;border:1px solid rgba(2,6,23,.06)}
+  .cell.flag{background:#ffd966;color:#071127}
+  .cell.mine{background:#ff6b6b;color:white}
+  .controls{display:flex;gap:8px;align-items:center;margin:12px 0 4px}
+  button{background:#0b1220;border:1px solid rgba(255,255,255,0.04);color:inherit;padding:8px 10px;border-radius:8px;cursor:pointer}
+  .small{font-size:13px;color:#9fb0c9}
+  #status{margin-left:12px}
+  @media (max-width:640px){:root{--cell:20px}}
+</style>
+</head>
+<body>
+  <h1>Contributions Minesweeper — Emmanuel Pérez Vivas</h1>
+  <div id="boardWrap">
+    <div class="controls">
+      <button id="resetBtn">Reset</button>
+      <button id="toggleFlagBtn">Toggle Flag Mode</button>
+      <div class="small" id="info">Loading contributions...</div>
+      <div id="status"></div>
+    </div>
+    <div id="board" role="grid" aria-label="Minesweeper board"></div>
+  </div>
+
+<script>
+(async function(){
+  const boardEl = document.getElementById('board');
+  const infoEl = document.getElementById('info');
+  const statusEl = document.getElementById('status');
+  const resetBtn = document.getElementById('resetBtn');
+  const toggleFlagBtn = document.getElementById('toggleFlagBtn');
+  let flagMode = false;
+
+  toggleFlagBtn.onclick = ()=>{ flagMode = !flagMode; toggleFlagBtn.textContent = flagMode ? 'Flag mode: ON' : 'Toggle Flag Mode' }
+
+  // try to fetch contributions.json in same repo root
+  let data;
+  try {
+    const r = await fetch('contributions.json');
+    if(!r.ok) throw new Error('missing');
+    data = await r.json();
+  } catch(e) {
+    infoEl.textContent = 'No contributions.json found — generating demo grid.';
+    // fallback demo grid: 52 weeks x 7 days
+    const weeks = 26;
+    const cols = [];
+    for(let c=0;c<weeks;c++){
+      const col = [];
+      for(let d=0;d<7;d++){
+        // random demo: 10% chance
+        col.push({date:null, count: Math.random() < 0.10 ? 1 : 0});
+      }
+      cols.push(col);
+    }
+    data = {username:'demo', weeks: cols};
+  }
+
+  const weeks = data.weeks;
+  const cols = weeks.length;
+  const rows = Math.max(...weeks.map(c=>c.length));
+
+  boardEl.style.gridTemplateColumns = `repeat(${cols}, auto)`;
+  boardEl.innerHTML = '';
+
+  // build internal board state
+  const board = []; // board[col][row] = {mine, revealed, flagged, adj}
+  for(let c=0;c<cols;c++){
+    const colDiv = document.createElement('div');
+    colDiv.className = 'col';
+    boardEl.appendChild(colDiv);
+    board[c] = [];
+    for(let r=0;r<rows;r++){
+      const entry = weeks[c] && weeks[c][r] ? weeks[c][r] : {date:null, count:0};
+      const mine = entry.count > 0; // your rule: any contribution -> mine
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.c = c; cell.dataset.r = r;
+      cell.title = entry.date ? `${entry.date} • contributions: ${entry.count}` : 'no data';
+      colDiv.appendChild(cell);
+      board[c][r] = {mine, revealed:false, flagged:false, adj:0, el:cell, date: entry.date, count: entry.count};
+    }
+  }
+
+  // compute adjacency (8-neighbors; note grid is columns of up to 7)
+  const neighbors = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+  for(let c=0;c<cols;c++){
+    for(let r=0;r<rows;r++){
+      let adj = 0;
+      neighbors.forEach(([dc,dr])=>{
+        const nc = c+dc, nr = r+dr;
+        if(nc>=0 && nc<cols && nr>=0 && nr<rows){
+          if(board[nc][nr].mine) adj++;
+        }
+      });
+      board[c][r].adj = adj;
+    }
+  }
+
+  // UI helpers
+  function revealCell(c,r){
+    const cell = board[c][r];
+    if(cell.revealed || cell.flagged) return;
+    cell.revealed = true;
+    const el = cell.el;
+    el.classList.add('revealed');
+    if(cell.mine){
+      el.classList.add('mine');
+      el.textContent = '💣';
+      gameOver(false);
+      return;
+    }
+    if(cell.adj>0){
+      el.textContent = cell.adj;
+    } else {
+      // empty -> flood fill neighbors
+      neighbors.forEach(([dc,dr])=>{
+        const nc = c+dc, nr = r+dr;
+        if(nc>=0 && nc<cols && nr>=0 && nr<rows) revealCell(nc,nr);
+      });
+    }
+    checkWin();
+  }
+
+  function toggleFlag(c,r){
+    const cell = board[c][r];
+    if(cell.revealed) return;
+    cell.flagged = !cell.flagged;
+    cell.el.classList.toggle('flag', cell.flagged);
+    cell.el.textContent = cell.flagged ? '🚩' : '';
+  }
+
+  function checkWin(){
+    // win when all non-mine cells are revealed
+    let ok = true;
+    for(let c=0;c<cols;c++){
+      for(let r=0;r<rows;r++){
+        const cell = board[c][r];
+        if(!cell.mine && !cell.revealed) { ok = false; break; }
+      }
+      if(!ok) break;
+    }
+    if(ok) gameOver(true);
+  }
+
+  function gameOver(won){
+    // reveal all mines
+    for(let c=0;c<cols;c++){
+      for(let r=0;r<rows;r++){
+        const cell = board[c][r];
+        if(cell.mine && !cell.revealed){
+          cell.revealed = true;
+          cell.el.classList.add('revealed','mine');
+          if(!cell.flagged) cell.el.textContent = '💣';
+        }
+      }
+    }
+    statusEl.textContent = won ? 'You won! 🎉' : 'Game over 💥';
+  }
+
+  // attach events
+  boardEl.addEventListener('click', (ev)=>{
+    const target = ev.target.closest('.cell');
+    if(!target) return;
+    const c = parseInt(target.dataset.c,10);
+    const r = parseInt(target.dataset.r,10);
+    if(flagMode) toggleFlag(c,r);
+    else revealCell(c,r);
+  });
+
+  boardEl.addEventListener('contextmenu', (ev)=>{
+    ev.preventDefault();
+    const target = ev.target.closest('.cell');
+    if(!target) return;
+    const c = parseInt(target.dataset.c,10);
+    const r = parseInt(target.dataset.r,10);
+    toggleFlag(c,r);
+  });
+
+  resetBtn.onclick = ()=> window.location.reload();
+
+  infoEl.textContent = `Loaded contributions for ${data.username} — ${cols} weeks × ${rows} days. Click squares to reveal, right-click to flag.`;
+
+})();
+</script>
+</body>
+</html>
